@@ -5,8 +5,7 @@ pub mod store;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use solana_program::{
-    self, account_info::AccountInfo, entrypoint::ProgramResult, msg, program_error::ProgramError,
-    pubkey::Pubkey,
+    self, account_info::AccountInfo, msg, program_error::ProgramError, pubkey::Pubkey,
 };
 use static_pubkey::static_pubkey;
 use store::{with_store, Transmissions};
@@ -35,7 +34,7 @@ pub struct Round {
     pub answer: i128,
 }
 
-pub fn query<'info>(feed: &AccountInfo<'info>, scope: Scope) -> Result<Vec<u8>, ProgramError> {
+pub fn query(feed: &AccountInfo, scope: Scope) -> Result<Vec<u8>, ProgramError> {
     if feed.owner.ne(&CHAINLINK_STORE_PROGRAM) {
         msg!("invalid program owner");
         return Err(ProgramError::IllegalOwner);
@@ -107,18 +106,18 @@ pub fn query<'info>(feed: &AccountInfo<'info>, scope: Scope) -> Result<Vec<u8>, 
 }
 
 /// Query the feed version.
-pub fn version<'info>(feed: &AccountInfo<'info>) -> Result<u8, ProgramError> {
-    Ok(query(&feed, Scope::Version)?[0])
+pub fn version(feed: &AccountInfo) -> Result<u8, ProgramError> {
+    Ok(query(feed, Scope::Version)?[0])
 }
 
 /// Returns the amount of decimal places.
-pub fn decimals<'info>(feed: &AccountInfo<'info>) -> Result<u8, ProgramError> {
-    Ok(query(&feed, Scope::Decimals)?[0])
+pub fn decimals(feed: &AccountInfo) -> Result<u8, ProgramError> {
+    Ok(query(feed, Scope::Decimals)?[0])
 }
 
 /// Returns the feed description.
-pub fn description<'info>(feed: &AccountInfo<'info>) -> Result<String, ProgramError> {
-    let result = query(&feed, Scope::Description)?;
+pub fn description(feed: &AccountInfo) -> Result<String, ProgramError> {
+    let result = query(feed, Scope::Description)?;
     if let Ok(desc) = String::from_utf8(result) {
         Ok(desc)
     } else {
@@ -128,12 +127,12 @@ pub fn description<'info>(feed: &AccountInfo<'info>) -> Result<String, ProgramEr
 }
 
 /// Returns round data for the latest round.
-pub fn latest_round_data<'info>(feed: &AccountInfo<'info>) -> Result<Round, ProgramError> {
+pub fn latest_round_data(feed: &AccountInfo) -> Result<Round, ProgramError> {
     Ok(Round::deserialize(
-        &mut &query(&feed, Scope::LatestRoundData)?[..],
+        &mut &query(feed, Scope::LatestRoundData)?[..],
     )?)
 }
 /// Returns the address of the underlying OCR2 aggregator.
-pub fn aggregator<'info>(feed: &AccountInfo<'info>) -> Result<Pubkey, ProgramError> {
-    Ok(Pubkey::new(&query(&feed, Scope::Aggregator)?[..]))
+pub fn aggregator(feed: &AccountInfo) -> Result<Pubkey, ProgramError> {
+    Ok(Pubkey::new(&query(feed, Scope::Aggregator)?[..]))
 }

@@ -1,7 +1,7 @@
 //! store account types, values, etc.. extracted from https://github.com/smartcontractkit/chainlink-solana/blob/develop/contracts/programs/store/src/lib.rs
 use crate::FEED_VERSION;
 use borsh::{BorshDeserialize, BorshSerialize};
-use so_defi_utils::accessor::{self, to_u32, AccessorType};
+use so_defi_utils::accessor::{to_u32, AccessorType};
 use solana_program::account_info::AccountInfo;
 use solana_program::msg;
 use solana_program::program_error::ProgramError;
@@ -37,13 +37,9 @@ pub struct Transmission {
     pub _padding2: u64,
 }
 
-use std::borrow::BorrowMut;
 use std::cell::Ref;
-use std::cell::RefMut;
-use std::io::Write;
+
 use std::mem::size_of;
-use std::ops::Deref;
-use std::ops::DerefMut;
 
 #[cfg_attr(not(target_arch = "bpf"), derive(Debug))]
 /// Two ringbuffers
@@ -88,12 +84,12 @@ where
     F: FnOnce(&mut Feed) -> T,
 {
     let n = {
-        let response = AccessorType::U8(8).access(&account);
+        let response = AccessorType::U8(8).access(account);
         if response[0].ne(&FEED_VERSION) {
             msg!("invalid feed version");
             return Err(ProgramError::InvalidAccountData);
         }
-        to_u32(&AccessorType::U32(148).access(&account)[..]) as usize
+        to_u32(&AccessorType::U32(148).access(account)[..]) as usize
     };
 
     let (live, historical) = {
@@ -255,7 +251,7 @@ mod tests {
         let mut lamports = 0u64;
 
         let pubkey = Pubkey::default();
-        let mut info = AccountInfo::new(
+        let info = AccountInfo::new(
             &pubkey,
             false,
             false,
