@@ -33,7 +33,7 @@ pub struct Round {
 }
 
 
-pub fn query<'info>(feed: &mut AccountInfo<'info>, scope: Scope) -> ProgramResult {
+pub fn query<'info>(mut feed: AccountInfo<'info>, scope: Scope) -> ProgramResult {
     if feed.owner.ne(&CHAINLINK_STORE_PROGRAM) {
         msg!("invalid program owner");
         return Err(ProgramError::IllegalOwner);
@@ -78,7 +78,7 @@ pub fn query<'info>(feed: &mut AccountInfo<'info>, scope: Scope) -> ProgramResul
             data.serialize(&mut buf)?;
         }
         Scope::RoundData { round_id } => {
-            let round = match with_store(feed, |store| store.fetch(round_id)) {
+            let round = match with_store(feed.clone(), |store| store.fetch(round_id)) {
                 Ok(store_info) => if let Some(info) = store_info {
                     info
                 } else {
@@ -97,7 +97,7 @@ pub fn query<'info>(feed: &mut AccountInfo<'info>, scope: Scope) -> ProgramResul
             data.serialize(&mut buf)?;
         }
         Scope::LatestRoundData => {
-            let round = match  with_store(feed, |store| store.latest()) {
+            let round = match  with_store(feed.clone(), |store| store.latest()) {
                 Ok(store_info) => if let Some(info) = store_info {
                     info
                 } else {

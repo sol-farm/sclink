@@ -5,7 +5,7 @@ use solana_program::program_error::ProgramError;
 use solana_program::pubkey::Pubkey;
 use solana_program::msg;
 use crate::FEED_VERSION;
-use so_defi_utils::accessor::{self, AccessorType};
+use so_defi_utils::accessor::{self, AccessorType, to_u32};
 
 pub const HEADER_SIZE: usize = 192;
 
@@ -37,22 +37,29 @@ pub struct Transmission {
     pub _padding2: u64,
 }
 
+use std::borrow::BorrowMut;
 use std::cell::RefMut;
+use std::cell::Ref;
+use std::io::Write;
 use std::mem::size_of;
+use std::ops::Deref;
+use std::ops::DerefMut;
 
+#[cfg_attr(not(target_arch = "bpf"), derive(Debug))]
 /// Two ringbuffers
 /// - Live one that has a day's worth of data that's updated every second
 /// - Historical one that stores historical data
 pub struct Feed<'a> {
     pub header: &'a mut Box<Transmissions>,
-    live: RefMut<'a, [Transmission]>,
-    historical: RefMut<'a, [Transmission]>,
+    live: &'a mut [Transmission],
+    historical: &'a mut [Transmission],
 }
 
 
 #[derive(BorshSerialize, BorshDeserialize, Clone, type_layout::TypeLayout)]
+#[cfg_attr(not(target_arch = "bpf"), derive(Debug))]
 pub struct Transmissions {
-    pub descriminator: [u8; 8],
+    pub _discrim: [u8; 8],
     pub version: u8,
     pub state: u8,
     pub owner: Pubkey,
@@ -75,54 +82,48 @@ impl Transmissions {
 }
 
 pub fn with_store<'a, 'info: 'a, F, T>(
-    account: &AccountInfo<'info>,
+    account: AccountInfo<'info>,
     f: F,
 ) -> Result<T, ProgramError>
 where
     F: FnOnce(&mut Feed) -> T,
 {
-    // Only try reading feeds matching the current version.
 
-    // the first 8 bytes are the discriminator, but it's an array buffer
-    // so the offset of the version number is 8
-    let version_info = AccessorType::U8(8).access(account);
-    if version_info.len() != 0 {
-        msg!("failed to fetch version info");
-        return Err(ProgramError::InvalidAccountData)
-    } else if version_info[0] != FEED_VERSION {
-        msg!("invalid version");
-        return Err(ProgramError::InvalidAccountData);
-    }
-
-    // todo
-    // let n = account.live_length as usize;
-    let n = 1;
-    let data = account.try_borrow_mut_data()?;
-
-    // two ringbuffers, live data and historical with smaller granularity
-    let (live, historical) = RefMut::map_split(data, |data| {
-        // skip the header
-        let (_header, data) = data.split_at_mut(8 + HEADER_SIZE); // discriminator + header size
-        let (live, historical) = data.split_at_mut(n * size_of::<Transmission>());
-        // NOTE: no try_map_split available..
-        let live = bytemuck::try_cast_slice_mut::<_, Transmission>(live).unwrap();
-        let historical = bytemuck::try_cast_slice_mut::<_, Transmission>(historical).unwrap();
-        (live, historical)
-    });
-    let data = match account.data.try_borrow() {
-        Ok(data) =>  data,
-        Err(_) => {
-            msg!("borrow failed");
-            return Err(ProgramError::AccountBorrowFailed)
+    let n = {
+        let response = AccessorType::U8(8).access(&account);
+        if response[0].ne(&FEED_VERSION) {
+            msg!("invalid feed version");
+            return Err(ProgramError::InvalidAccountData);
         }
+        to_u32(&AccessorType::U32(148).access(&account)[..]) as usize
     };
-    let transmission = Transmissions::deserialize(&mut &data[..])?;
-    let mut store = Feed {
-        header: &mut Box::new(transmission),
+
+
+    let (
         live,
         historical,
+    ) = {
+        let data  = account.try_borrow_data()?;
+        let (live, hist) = Ref::map_split(data, |data| {
+            // skip the header
+            let (_header, data) = data.split_at(8 + HEADER_SIZE); // discriminator + header size
+            let (live, historical) = data.split_at(n * size_of::<Transmission>());
+            // NOTE: no try_map_split available..
+            let live = bytemuck::try_cast_slice::<_, Transmission>(live).unwrap();
+            let historical = bytemuck::try_cast_slice::<_, Transmission>(historical).unwrap();
+            (live, historical)
+        });
+        (live, hist)
     };
-
+    let mut live = live.to_vec();
+    let mut historical = historical.to_vec();
+    let data  = account.try_borrow_data()?;
+    let transmission = Transmissions::deserialize(&mut &data[..]).unwrap();
+    let mut store = Feed {
+        header: &mut Box::new(transmission),
+        live: &mut live[..],
+        historical: &mut historical[..],
+    };
     Ok(f(&mut store))
 }
 
@@ -204,12 +205,26 @@ impl<'a> Feed<'a> {
 
 #[cfg(test)]
 mod tests {
+    use solana_program::account_info::IntoAccountInfo;
+    use static_pubkey::static_pubkey;
     use type_layout::TypeLayout;
 
     use super::*;
     #[test]
     fn transmission_ffset() {
         println!("{}", Transmissions::type_layout());
+    }
+    #[test]
+    fn transmissions_btc() {
+        let rpc = solana_client::rpc_client::RpcClient::new("https://ssc-dao.genesysgo.net");
+        let btc_feed = static_pubkey!("CGmWwBNsTRDENT5gmVZzRu38GnNnMm1K5C3sFiUUyYQX");
+        let btc_feed_account = rpc.get_account(&btc_feed).unwrap();
+        let mut btc_feed_tup = (btc_feed, btc_feed_account);
+        let btc_feed_info = btc_feed_tup.into_account_info();
+        with_store(btc_feed_info, |feed| {
+            assert_eq!(feed.header.live_length, 86400);
+        }).unwrap();
+
     }
     #[test]
     fn transmissions() {
@@ -225,7 +240,7 @@ mod tests {
 
         // insert the initial header with some granularity
         Transmissions {
-            descriminator: [0_u8; 8],
+            _discrim: [0_u8; 8],
             version: 2,
             state: Transmissions::NORMAL,
             owner: Pubkey::default(),
@@ -257,7 +272,7 @@ mod tests {
             0,
         );
 
-        with_store(&mut info, |store| {
+        with_store(info, |store| {
             for i in 1..=20 {
                 store.insert(Transmission {
                     slot: u64::from(i),
