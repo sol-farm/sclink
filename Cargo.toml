@@ -1,0 +1,13 @@
+[package]
+name = "sclink"
+version = "0.1.0"
+edition = "2021"
+authors = ["Tulip Protocol"]
+description = "lightweight client for reading chainlink solana feeds"
+keywords = ["solana", "tulip-protocol", "chainlink"]
+license = "Apache-2.0"
+documentation = "https://docs.rs/sclink"
+readme = "./README.md"
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
