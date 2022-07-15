@@ -10,8 +10,8 @@ use solana_program::{
     self, account_info::AccountInfo, msg, program_error::ProgramError, pubkey::Pubkey,
 };
 use static_pubkey::static_pubkey;
-use std::cell::Ref;
-use store::{with_store, Transmissions};
+
+use store::{with_store};
 pub const CHAINLINK_STORE_PROGRAM: Pubkey =
     static_pubkey!("HEvSKofvBgfaexv23kMabbYqxasxU3mQ4ibBMEmJWHny");
 
