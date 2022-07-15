@@ -4,10 +4,13 @@
 pub mod store;
 
 use borsh::{BorshDeserialize, BorshSerialize};
+use so_defi_utils::accessor::to_u32;
+use so_defi_utils::accessor::AccessorType;
 use solana_program::{
     self, account_info::AccountInfo, msg, program_error::ProgramError, pubkey::Pubkey,
 };
 use static_pubkey::static_pubkey;
+use std::cell::Ref;
 use store::{with_store, Transmissions};
 pub const CHAINLINK_STORE_PROGRAM: Pubkey =
     static_pubkey!("HEvSKofvBgfaexv23kMabbYqxasxU3mQ4ibBMEmJWHny");
@@ -27,6 +30,7 @@ pub enum Scope {
 }
 
 #[derive(BorshSerialize, BorshDeserialize, Clone, Copy)]
+#[cfg_attr(not(target_arch = "bpf"), derive(Debug))]
 pub struct Round {
     pub round_id: u32,
     pub slot: u64,
@@ -39,25 +43,18 @@ pub fn query(feed: &AccountInfo, scope: Scope) -> Result<Vec<u8>, ProgramError> 
         msg!("invalid program owner");
         return Err(ProgramError::IllegalOwner);
     }
-    let data = match feed.data.try_borrow() {
-        Ok(data) => data,
-        Err(_) => {
-            msg!("borrow failed");
-            return Err(ProgramError::AccountBorrowFailed);
-        }
-    };
-    let header = Transmissions::deserialize(&mut &data[..])?;
     match scope {
-        Scope::Version => Ok(vec![header.version]),
-        Scope::Decimals => Ok(vec![header.decimals]),
+        Scope::Version => Ok(vec![AccessorType::U8(8).access(feed)[0]]),
+        Scope::Decimals => Ok(vec![AccessorType::U8(138).access(feed)[0]]),
         Scope::Description => {
+            // description length is 32 bytes, so we can use the Pubkey accessor
+            let description = AccessorType::Pubkey(106).access(feed);
             // Look for the first null byte
-            let end = header
-                .description
+            let end = description
                 .iter()
                 .position(|byte| byte == &0)
-                .unwrap_or(header.description.len());
-            Ok(header.description[..end].to_vec())
+                .unwrap_or(description.len());
+            Ok(description[..end].to_vec())
         }
         Scope::RoundData { round_id } => {
             let round = match with_store(feed, |store| store.fetch(round_id)) {
@@ -71,7 +68,6 @@ pub fn query(feed: &AccountInfo, scope: Scope) -> Result<Vec<u8>, ProgramError> 
                 }
                 Err(err) => return Err(err),
             };
-
             Ok(Round {
                 round_id,
                 slot: round.slot,
@@ -92,16 +88,15 @@ pub fn query(feed: &AccountInfo, scope: Scope) -> Result<Vec<u8>, ProgramError> 
                 }
                 Err(err) => return Err(err),
             };
-
             Ok(Round {
-                round_id: header.latest_round_id,
+                round_id: to_u32(&AccessorType::U32(143).access(feed)[..]),
                 slot: round.slot,
                 answer: round.answer,
                 timestamp: round.timestamp,
             }
             .try_to_vec()?)
         }
-        Scope::Aggregator => Ok(header.writer.to_bytes().to_vec()),
+        Scope::Aggregator => Ok(AccessorType::Pubkey(74).access(feed)),
     }
 }
 
@@ -135,4 +130,35 @@ pub fn latest_round_data(feed: &AccountInfo) -> Result<Round, ProgramError> {
 /// Returns the address of the underlying OCR2 aggregator.
 pub fn aggregator(feed: &AccountInfo) -> Result<Pubkey, ProgramError> {
     Ok(Pubkey::new(&query(feed, Scope::Aggregator)?[..]))
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use solana_program::account_info::IntoAccountInfo;
+    use static_pubkey::static_pubkey;
+    #[test]
+    fn test_query() {
+        let rpc = solana_client::rpc_client::RpcClient::new("https://ssc-dao.genesysgo.net");
+        let btc_feed = static_pubkey!("CGmWwBNsTRDENT5gmVZzRu38GnNnMm1K5C3sFiUUyYQX");
+        let btc_feed_account = rpc.get_account(&btc_feed).unwrap();
+        let mut btc_feed_tup = (btc_feed, btc_feed_account);
+        let btc_feed_info = btc_feed_tup.into_account_info();
+        let version = version(&btc_feed_info).unwrap();
+        let decimals = decimals(&btc_feed_info).unwrap();
+        let description = description(&btc_feed_info).unwrap();
+        let latest_data = latest_round_data(&btc_feed_info).unwrap();
+        let agg = aggregator(&btc_feed_info).unwrap();
+
+        assert_eq!(version, FEED_VERSION);
+        assert_eq!(decimals, 8);
+        assert_eq!(
+            agg,
+            static_pubkey!("8xfHq5ZctheZMhntmXsayHg4GtRGvDqdz4zKcjCqJgaY")
+        );
+        assert_eq!(description, "BTC / USD");
+        assert!(latest_data.round_id >= 2177184);
+        assert!(latest_data.slot >= 141757948);
+        assert!(latest_data.timestamp >= 1657926454);
+    }
 }

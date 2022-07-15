@@ -51,10 +51,16 @@ pub struct Feed<'a> {
     historical: &'a mut [Transmission],
 }
 
-#[derive(BorshSerialize, BorshDeserialize, Clone, type_layout::TypeLayout)]
-#[cfg_attr(not(target_arch = "bpf"), derive(Debug))]
+#[derive(BorshSerialize, BorshDeserialize, Clone)]
+// note about the type layout: it incorrectly detects a padding of 20 bytes at the start
+// and 151 bytes in the middle, subtract those values from the offsets
+#[cfg_attr(
+    not(target_arch = "bpf"),
+    derive(Debug),
+    derive(type_layout::TypeLayout)
+)]
 pub struct Transmissions {
-    pub _discrim: [u8; 8],
+    pub _discriminator: [u8; 8],
     pub version: u8,
     pub state: u8,
     pub owner: Pubkey,
@@ -215,6 +221,9 @@ mod tests {
             assert_eq!(feed.header.live_length, 86400);
         })
         .unwrap();
+        let latest_round_id = to_u32(&AccessorType::U32(143).access(&btc_feed_info)[..]);
+        // latest round as of jul 15th
+        assert!(latest_round_id >= 2176986);
     }
     #[test]
     fn transmissions() {
@@ -230,7 +239,7 @@ mod tests {
 
         // insert the initial header with some granularity
         Transmissions {
-            _discrim: [0_u8; 8],
+            _discriminator: [0_u8; 8],
             version: 2,
             state: Transmissions::NORMAL,
             owner: Pubkey::default(),
