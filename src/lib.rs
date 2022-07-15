@@ -11,7 +11,7 @@ use solana_program::{
 };
 use static_pubkey::static_pubkey;
 
-use store::{with_store};
+use store::with_store;
 pub const CHAINLINK_STORE_PROGRAM: Pubkey =
     static_pubkey!("HEvSKofvBgfaexv23kMabbYqxasxU3mQ4ibBMEmJWHny");
 
@@ -25,17 +25,25 @@ pub enum Scope {
     RoundData { round_id: u32 },
     LatestRoundData,
     Aggregator,
+    LatestRoundDataWithDecimals,
     // ProposedAggregator
     // Owner
 }
 
-#[derive(BorshSerialize, BorshDeserialize, Clone, Copy)]
+#[derive(BorshSerialize, BorshDeserialize, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(not(target_arch = "bpf"), derive(Debug))]
 pub struct Round {
     pub round_id: u32,
     pub slot: u64,
     pub timestamp: u32,
     pub answer: i128,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(target_arch = "bpf"), derive(Debug))]
+pub struct RoundWithDecimals {
+    pub round: Round,
+    pub decimals: u8,
 }
 
 pub fn query(feed: &AccountInfo, scope: Scope) -> Result<Vec<u8>, ProgramError> {
@@ -97,6 +105,29 @@ pub fn query(feed: &AccountInfo, scope: Scope) -> Result<Vec<u8>, ProgramError> 
             .try_to_vec()?)
         }
         Scope::Aggregator => Ok(AccessorType::Pubkey(74).access(feed)),
+        Scope::LatestRoundDataWithDecimals => {
+            let round = match with_store(feed, |store| store.latest()) {
+                Ok(store_info) => {
+                    if let Some(info) = store_info {
+                        info
+                    } else {
+                        msg!("failed to fetch round data");
+                        return Err(ProgramError::InvalidAccountData);
+                    }
+                }
+                Err(err) => return Err(err),
+            };
+            Ok(RoundWithDecimals {
+                round: Round {
+                    round_id: to_u32(&AccessorType::U32(143).access(feed)[..]),
+                    slot: round.slot,
+                    answer: round.answer,
+                    timestamp: round.timestamp,
+                },
+                decimals: AccessorType::U8(138).access(feed)[0],
+            }
+            .try_to_vec()?)
+        }
     }
 }
 
@@ -132,6 +163,15 @@ pub fn aggregator(feed: &AccountInfo) -> Result<Pubkey, ProgramError> {
     Ok(Pubkey::new(&query(feed, Scope::Aggregator)?[..]))
 }
 
+/// Returns round data for the latest round, including decimal value
+pub fn latest_round_data_with_decimals(
+    feed: &AccountInfo,
+) -> Result<RoundWithDecimals, ProgramError> {
+    Ok(RoundWithDecimals::deserialize(
+        &mut &query(feed, Scope::LatestRoundDataWithDecimals)?[..],
+    )?)
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -160,5 +200,10 @@ mod test {
         assert!(latest_data.round_id >= 2177184);
         assert!(latest_data.slot >= 141757948);
         assert!(latest_data.timestamp >= 1657926454);
+        println!("{}", latest_data.answer);
+
+        let latest_with_dec = latest_round_data_with_decimals(&btc_feed_info).unwrap();
+        assert_eq!(latest_data, latest_with_dec.round);
+        assert_eq!(latest_with_dec.decimals, 8);
     }
 }
