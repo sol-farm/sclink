@@ -3,12 +3,15 @@
 
 pub mod store;
 
-use borsh::{BorshSerialize, BorshDeserialize};
-use solana_program::{self, msg, pubkey::Pubkey, entrypoint::ProgramResult, account_info::AccountInfo, program_error::ProgramError};
+use borsh::{BorshDeserialize, BorshSerialize};
+use solana_program::{
+    self, account_info::AccountInfo, entrypoint::ProgramResult, msg, program_error::ProgramError,
+    pubkey::Pubkey,
+};
 use static_pubkey::static_pubkey;
-use store::{Transmissions, with_store};
-
-pub const CHAINLINK_STORE_PROGRAM: Pubkey = static_pubkey!("HEvSKofvBgfaexv23kMabbYqxasxU3mQ4ibBMEmJWHny");
+use store::{with_store, Transmissions};
+pub const CHAINLINK_STORE_PROGRAM: Pubkey =
+    static_pubkey!("HEvSKofvBgfaexv23kMabbYqxasxU3mQ4ibBMEmJWHny");
 
 pub const FEED_VERSION: u8 = 2;
 
@@ -32,32 +35,22 @@ pub struct Round {
     pub answer: i128,
 }
 
-
-pub fn query<'info>(mut feed: AccountInfo<'info>, scope: Scope) -> ProgramResult {
+pub fn query<'info>(feed: &AccountInfo<'info>, scope: Scope) -> Result<Vec<u8>, ProgramError> {
     if feed.owner.ne(&CHAINLINK_STORE_PROGRAM) {
         msg!("invalid program owner");
         return Err(ProgramError::IllegalOwner);
     }
-    use std::io::Cursor;
-
-    let mut buf = Cursor::new(Vec::with_capacity(128)); // TODO: calculate max size
     let data = match feed.data.try_borrow() {
-        Ok(data) =>  data,
+        Ok(data) => data,
         Err(_) => {
             msg!("borrow failed");
-            return Err(ProgramError::AccountBorrowFailed)
+            return Err(ProgramError::AccountBorrowFailed);
         }
     };
     let header = Transmissions::deserialize(&mut &data[..])?;
     match scope {
-        Scope::Version => {
-            let data = header.version;
-            data.serialize(&mut buf)?;
-        }
-        Scope::Decimals => {
-            let data = header.decimals;
-            data.serialize(&mut buf)?;
-        }
+        Scope::Version => Ok(vec![header.version]),
+        Scope::Decimals => Ok(vec![header.decimals]),
         Scope::Description => {
             // Look for the first null byte
             let end = header
@@ -65,62 +58,82 @@ pub fn query<'info>(mut feed: AccountInfo<'info>, scope: Scope) -> ProgramResult
                 .iter()
                 .position(|byte| byte == &0)
                 .unwrap_or(header.description.len());
-
-            let description = match String::from_utf8(header.description[..end].to_vec()) {
-                Ok(description) => description,
-                Err(err) => {
-                    msg!("failed to parse description {:#?}", err);
-                    return Err(ProgramError::InvalidAccountData);
-                }
-            };
-
-            let data = description;
-            data.serialize(&mut buf)?;
+            Ok(header.description[..end].to_vec())
         }
         Scope::RoundData { round_id } => {
-            let round = match with_store(feed.clone(), |store| store.fetch(round_id)) {
-                Ok(store_info) => if let Some(info) = store_info {
-                    info
-                } else {
-                    msg!("failed to fetch round data");
-                    return Err(ProgramError::InvalidAccountData)
-                },
+            let round = match with_store(feed, |store| store.fetch(round_id)) {
+                Ok(store_info) => {
+                    if let Some(info) = store_info {
+                        info
+                    } else {
+                        msg!("failed to fetch round data");
+                        return Err(ProgramError::InvalidAccountData);
+                    }
+                }
                 Err(err) => return Err(err),
             };
 
-            let data = Round {
+            Ok(Round {
                 round_id,
                 slot: round.slot,
                 answer: round.answer,
                 timestamp: round.timestamp,
-            };
-            data.serialize(&mut buf)?;
+            }
+            .try_to_vec()?)
         }
         Scope::LatestRoundData => {
-            let round = match  with_store(feed.clone(), |store| store.latest()) {
-                Ok(store_info) => if let Some(info) = store_info {
-                    info
-                } else {
-                    msg!("failed to fetch round data");
-                    return Err(ProgramError::InvalidAccountData)
-                },
+            let round = match with_store(feed, |store| store.latest()) {
+                Ok(store_info) => {
+                    if let Some(info) = store_info {
+                        info
+                    } else {
+                        msg!("failed to fetch round data");
+                        return Err(ProgramError::InvalidAccountData);
+                    }
+                }
                 Err(err) => return Err(err),
             };
 
-            let data = Round {
+            Ok(Round {
                 round_id: header.latest_round_id,
                 slot: round.slot,
                 answer: round.answer,
                 timestamp: round.timestamp,
-            };
-
-            data.serialize(&mut buf)?;
+            }
+            .try_to_vec()?)
         }
-        Scope::Aggregator => {
-            let data = header.writer;
-            data.serialize(&mut buf)?;
-        }
+        Scope::Aggregator => Ok(header.writer.to_bytes().to_vec()),
     }
+}
 
-    Ok(())
+/// Query the feed version.
+pub fn version<'info>(feed: &AccountInfo<'info>) -> Result<u8, ProgramError> {
+    Ok(query(&feed, Scope::Version)?[0])
+}
+
+/// Returns the amount of decimal places.
+pub fn decimals<'info>(feed: &AccountInfo<'info>) -> Result<u8, ProgramError> {
+    Ok(query(&feed, Scope::Decimals)?[0])
+}
+
+/// Returns the feed description.
+pub fn description<'info>(feed: &AccountInfo<'info>) -> Result<String, ProgramError> {
+    let result = query(&feed, Scope::Description)?;
+    if let Ok(desc) = String::from_utf8(result) {
+        Ok(desc)
+    } else {
+        msg!("utf8 parse failed");
+        Err(ProgramError::InvalidArgument)
+    }
+}
+
+/// Returns round data for the latest round.
+pub fn latest_round_data<'info>(feed: &AccountInfo<'info>) -> Result<Round, ProgramError> {
+    Ok(Round::deserialize(
+        &mut &query(&feed, Scope::LatestRoundData)?[..],
+    )?)
+}
+/// Returns the address of the underlying OCR2 aggregator.
+pub fn aggregator<'info>(feed: &AccountInfo<'info>) -> Result<Pubkey, ProgramError> {
+    Ok(Pubkey::new(&query(&feed, Scope::Aggregator)?[..]))
 }

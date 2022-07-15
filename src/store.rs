@@ -1,11 +1,11 @@
 //! store account types, values, etc.. extracted from https://github.com/smartcontractkit/chainlink-solana/blob/develop/contracts/programs/store/src/lib.rs
-use borsh::{BorshSerialize, BorshDeserialize};
+use crate::FEED_VERSION;
+use borsh::{BorshDeserialize, BorshSerialize};
+use so_defi_utils::accessor::{self, to_u32, AccessorType};
 use solana_program::account_info::AccountInfo;
+use solana_program::msg;
 use solana_program::program_error::ProgramError;
 use solana_program::pubkey::Pubkey;
-use solana_program::msg;
-use crate::FEED_VERSION;
-use so_defi_utils::accessor::{self, AccessorType, to_u32};
 
 pub const HEADER_SIZE: usize = 192;
 
@@ -38,8 +38,8 @@ pub struct Transmission {
 }
 
 use std::borrow::BorrowMut;
-use std::cell::RefMut;
 use std::cell::Ref;
+use std::cell::RefMut;
 use std::io::Write;
 use std::mem::size_of;
 use std::ops::Deref;
@@ -54,7 +54,6 @@ pub struct Feed<'a> {
     live: &'a mut [Transmission],
     historical: &'a mut [Transmission],
 }
-
 
 #[derive(BorshSerialize, BorshDeserialize, Clone, type_layout::TypeLayout)]
 #[cfg_attr(not(target_arch = "bpf"), derive(Debug))]
@@ -82,13 +81,12 @@ impl Transmissions {
 }
 
 pub fn with_store<'a, 'info: 'a, F, T>(
-    account: AccountInfo<'info>,
+    account: &AccountInfo<'info>,
     f: F,
 ) -> Result<T, ProgramError>
 where
     F: FnOnce(&mut Feed) -> T,
 {
-
     let n = {
         let response = AccessorType::U8(8).access(&account);
         if response[0].ne(&FEED_VERSION) {
@@ -98,12 +96,8 @@ where
         to_u32(&AccessorType::U32(148).access(&account)[..]) as usize
     };
 
-
-    let (
-        live,
-        historical,
-    ) = {
-        let data  = account.try_borrow_data()?;
+    let (live, historical) = {
+        let data = account.try_borrow_data()?;
         let (live, hist) = Ref::map_split(data, |data| {
             // skip the header
             let (_header, data) = data.split_at(8 + HEADER_SIZE); // discriminator + header size
@@ -117,7 +111,7 @@ where
     };
     let mut live = live.to_vec();
     let mut historical = historical.to_vec();
-    let data  = account.try_borrow_data()?;
+    let data = account.try_borrow_data()?;
     let transmission = Transmissions::deserialize(&mut &data[..]).unwrap();
     let mut store = Feed {
         header: &mut Box::new(transmission),
@@ -221,10 +215,10 @@ mod tests {
         let btc_feed_account = rpc.get_account(&btc_feed).unwrap();
         let mut btc_feed_tup = (btc_feed, btc_feed_account);
         let btc_feed_info = btc_feed_tup.into_account_info();
-        with_store(btc_feed_info, |feed| {
+        with_store(&btc_feed_info, |feed| {
             assert_eq!(feed.header.live_length, 86400);
-        }).unwrap();
-
+        })
+        .unwrap();
     }
     #[test]
     fn transmissions() {
@@ -272,7 +266,7 @@ mod tests {
             0,
         );
 
-        with_store(info, |store| {
+        with_store(&info, |store| {
             for i in 1..=20 {
                 store.insert(Transmission {
                     slot: u64::from(i),
