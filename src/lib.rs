@@ -3,6 +3,9 @@
 
 pub mod store;
 
+use std::cell::Ref;
+use std::mem::size_of;
+
 use borsh::{BorshDeserialize, BorshSerialize};
 use so_defi_utils::accessor::to_u32;
 use so_defi_utils::accessor::AccessorType;
@@ -12,6 +15,9 @@ use solana_program::{
 use static_pubkey::static_pubkey;
 
 use store::with_store;
+
+use crate::store::HEADER_SIZE;
+use crate::store::Transmission;
 pub const CHAINLINK_STORE_PROGRAM: Pubkey =
     static_pubkey!("HEvSKofvBgfaexv23kMabbYqxasxU3mQ4ibBMEmJWHny");
 
@@ -26,6 +32,7 @@ pub enum Scope {
     LatestRoundData,
     Aggregator,
     LatestRoundDataWithDecimals,
+    LatestRoundDataWithDecimals2,
     // ProposedAggregator
     // Owner
 }
@@ -128,6 +135,54 @@ pub fn query(feed: &AccountInfo, scope: Scope) -> Result<Vec<u8>, ProgramError> 
             }
             .try_to_vec()?)
         }
+        Scope::LatestRoundDataWithDecimals2 => {
+                msg!("checking feed version");
+                let response = AccessorType::U8(8).access(feed);
+                if response[0].ne(&FEED_VERSION) {
+                    msg!("invalid feed version");
+                    return Err(ProgramError::InvalidAccountData);
+                }
+                
+                let n = to_u32(&AccessorType::U32(148).access(feed)[..]) as usize;
+                {
+                    
+                    let (live, _) = {
+                        let data = feed.try_borrow_data()?;
+                        std::cell::Ref::map_split(data, |data| {
+                            // skip the header
+                            let (_header, data) = data.split_at(8 + HEADER_SIZE); // discriminator + header size
+                            let (live, historical) = data.split_at(n * size_of::<Transmission>());
+                            // NOTE: no try_map_split available..
+                            let live = bytemuck::try_cast_slice::<_, Transmission>(live).unwrap();
+                            let historical = bytemuck::try_cast_slice::<_, Transmission>(historical).unwrap();
+                            (live, historical)
+                        })
+                    };
+                    let transmission = crate::store::Transmissions::deserialize(&mut &feed.try_borrow_data()?[..]).unwrap();
+                    if transmission.latest_round_id == 0 {
+                        panic!("found is none");
+                    }
+                    let len = transmission.live_length;
+                    let idx = (transmission.live_cursor + len.saturating_sub(1)) % len;
+                    let (
+                        slot,
+                        answer,
+                        timestamp
+                    ) = {
+                        let round_data = &live[idx as usize];
+                        (round_data.slot, round_data.answer, round_data.timestamp)
+                    };
+                    Ok(RoundWithDecimals {
+                        round: Round {
+                            round_id: to_u32(&AccessorType::U32(143).access(feed)[..]),
+                            slot: slot,
+                            answer: answer,
+                            timestamp: timestamp,
+                        },
+                        decimals: AccessorType::U8(138).access(feed)[0],
+                    }.try_to_vec()?)
+                }
+        }
     }
 }
 
@@ -172,6 +227,15 @@ pub fn latest_round_data_with_decimals(
     )?)
 }
 
+/// same as latest_round_data_with_decimals2 but attempts to reduce the number of allocations
+pub fn latest_round_data_with_decimals2(
+    feed: &AccountInfo,
+) -> Result<RoundWithDecimals, ProgramError> {
+    Ok(RoundWithDecimals::deserialize(
+        &mut &query(feed, Scope::LatestRoundDataWithDecimals2)?[..],
+    )?)
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -205,5 +269,9 @@ mod test {
         let latest_with_dec = latest_round_data_with_decimals(&btc_feed_info).unwrap();
         assert_eq!(latest_data, latest_with_dec.round);
         assert_eq!(latest_with_dec.decimals, 8);
+
+        let latest_with_dec2 = latest_round_data_with_decimals2(&btc_feed_info).unwrap();
+        assert_eq!(latest_data, latest_with_dec2.round);
+        assert_eq!(latest_with_dec2.decimals, 8);
     }
 }

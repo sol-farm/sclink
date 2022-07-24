@@ -46,7 +46,7 @@ use std::mem::size_of;
 /// - Live one that has a day's worth of data that's updated every second
 /// - Historical one that stores historical data
 pub struct Feed<'a> {
-    pub header: &'a mut Box<Transmissions>,
+    pub header: &'a mut Transmissions,
     live: &'a mut [Transmission],
     historical: &'a mut [Transmission],
 }
@@ -60,21 +60,21 @@ pub struct Feed<'a> {
     derive(type_layout::TypeLayout)
 )]
 pub struct Transmissions {
-    pub _discriminator: [u8; 8],
-    pub version: u8,
-    pub state: u8,
-    pub owner: Pubkey,
-    pub proposed_owner: Pubkey,
-    pub writer: Pubkey,
+    pub _discriminator: [u8; 8], // 8
+    pub version: u8, // 16
+    pub state: u8, // 24
+    pub owner: Pubkey, // 56
+    pub proposed_owner: Pubkey, // 88
+    pub writer: Pubkey, // 120
     /// Raw UTF-8 byte string
-    pub description: [u8; 32],
-    pub decimals: u8,
-    pub flagging_threshold: u32,
-    pub latest_round_id: u32,
-    pub granularity: u8,
-    pub live_length: u32,
-    live_cursor: u32,
-    historical_cursor: u32,
+    pub description: [u8; 32], // 152
+    pub decimals: u8, // 153 
+    pub flagging_threshold: u32, // 185
+    pub latest_round_id: u32, // 217
+    pub granularity: u8, // 218
+    pub live_length: u32, // 250
+    pub live_cursor: u32, // 282 
+    pub historical_cursor: u32, // 324
 }
 
 impl Transmissions {
@@ -111,14 +111,12 @@ where
         });
         (live, hist)
     };
-    let mut live = live.to_vec();
-    let mut historical = historical.to_vec();
     let data = account.try_borrow_data()?;
-    let transmission = Transmissions::deserialize(&mut &data[..]).unwrap();
+    let mut transmission = Transmissions::deserialize(&mut &data[..]).unwrap();
     let mut store = Feed {
-        header: &mut Box::new(transmission),
-        live: &mut live[..],
-        historical: &mut historical[..],
+        header: &mut transmission,
+        live: &mut live.to_vec(),
+        historical: &mut historical.to_vec(),
     };
     Ok(f(&mut store))
 }
