@@ -1,6 +1,6 @@
 [package]
 name = "sclink"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 authors = ["Tulip Protocol"]
 description = "lightweight client for reading chainlink solana feeds"
